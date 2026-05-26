@@ -21,6 +21,12 @@ const SERVICES = [
     { id: "ANSYS_HPC", state: "crit", triad: ["ewa", "phx", "clt"], down: ["phx", "clt"] } // Quorum lost
 ];
 
+const ANIMATION_CONFIG = {
+    baseLatencyDur: 3.0, // All packets traverse in 3 seconds
+    nearLatencyThreshold: 150, // px - distance threshold for "near" latency
+    farLatencyThreshold: 350   // px - distance threshold for "far" latency
+};
+
 let currentView = null;
 
 function init() {
@@ -80,18 +86,27 @@ function drawMap(svc, upNodes) {
                     if (d < minVisDist) { minVisDist = d; closest = t; }
                 });
 
-                // Calculate latency animation speed based on distance
-                // Local routing (e.g., SoCal to PHX) = fast. Overseas (BLR to CLT) = slow.
-                const latencyDur = Math.max(0.5, minVisDist / 100).toFixed(1); 
+                // All packets take consistent time, latency shown via color
+                const latencyDur = ANIMATION_CONFIG.baseLatencyDur;
                 const pathId = `path-${key}`;
                 
                 // Draw static line
                 drawLink(site, SITES[closest], gClients, 'client', pathId);
                 
-                // Animate packet
-                const packetColor = upNodes.length < 2 ? 'var(--red)' : (latencyDur > 1.5 ? 'var(--amber)' : 'var(--cyan)');
+                // Determine packet color based on distance (simulating latency)
+                let packetColor = 'var(--cyan)'; // Default: good latency
+                if (minVisDist > ANIMATION_CONFIG.farLatencyThreshold) {
+                    packetColor = 'var(--amber)'; // High latency (far routes)
+                } else if (minVisDist > ANIMATION_CONFIG.nearLatencyThreshold) {
+                    packetColor = 'var(--cyan)'; // Medium latency (local routes)
+                }
+                
+                if (upNodes.length < 2) {
+                    packetColor = 'var(--red)'; // Service down
+                }
+                
                 if (upNodes.length >= 2) { // Only animate if quorum is up
-                    drawPulse(pathId, latencyDur, packetColor, gClients);
+                    drawPulse(pathId, latencyDur, packetColor, gClients, minVisDist);
                 }
             }
         }
@@ -144,10 +159,13 @@ function drawLink(n1, n2, group, className, id = null) {
     group.appendChild(path);
 }
 
-function drawPulse(pathId, duration, color, group) {
+function drawPulse(pathId, duration, color, group, distance) {
     const packet = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
     packet.setAttribute('r', '3'); packet.setAttribute('fill', color);
-    packet.style.filter = `drop-shadow(0 0 5px ${color})`;
+    
+    // Increase glow intensity for far/high-latency routes
+    const glowIntensity = distance > ANIMATION_CONFIG.farLatencyThreshold ? 8 : 5;
+    packet.style.filter = `drop-shadow(0 0 ${glowIntensity}px ${color})`;
     
     const animate = document.createElementNS('http://www.w3.org/2000/svg', 'animateMotion');
     animate.setAttribute('dur', `${duration}s`);
