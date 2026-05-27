@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>MSD v8.0 | Triad Topology</title>
+    <title>MSD v8.2 | Fluid Topology</title>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -14,14 +14,13 @@
         </aside>
 
         <main class="topology-viewer">
-            <header class="viewer-header">
+            <header class="viewer-header core-breath" id="core-panel">
                 <div>
                     <h1 id="view-title">AWAITING SERVICE SELECTION</h1>
                     <h2 id="view-subtitle">TRIAD QUORUM STATUS: --</h2>
                 </div>
                 <div class="latency-legend">
-                    <span class="legend-item"><div class="dot fast"></div> <50ms</span>
-                    <span class="legend-item"><div class="dot slow"></div> >200ms</span>
+                    <span class="legend-item"><div class="dot active"></div> ONLINE</span>
                     <span class="legend-item"><div class="dot drop"></div> FAULT</span>
                 </div>
             </header>
@@ -29,10 +28,15 @@
             <div class="map-container">
                 <div class="map-underlay"></div>
                 <svg id="topology-layer" viewBox="0 0 1000 500" preserveAspectRatio="xMidYMid slice">
+                    <defs>
+                        <filter id="conduit-blur" x="-50%" y="-50%" width="200%" height="200%">
+                            <feGaussianBlur stdDeviation="3" result="blur" />
+                        </filter>
+                    </defs>
                     <g id="layer-quorum-links"></g>
                     <g id="layer-client-links"></g>
                     <g id="layer-nodes"></g>
-                </svg>
+                    <g id="layer-plasma"></g> </svg>
             </div>
         </main>
     </div>
