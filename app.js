@@ -19,12 +19,14 @@ const SERVICES = [
     { id: "NX_SIEMENS", state: "ok", triad: ["ewa", "phx", "clt"], down: [] },
     { id: "MATLAB_R2", state: "warn", triad: ["ewa", "phx", "clt"], down: ["ewa"] }, // EWA is down, testing failover
     { id: "ANSYS_HPC", state: "crit", triad: ["ewa", "phx", "clt"], down: ["phx", "clt"] } // Quorum lost
-];
+};
 
-const ANIMATION_CONFIG = {
-    baseLatencyDur: 3.0, // All packets traverse in 3 seconds
-    nearLatencyThreshold: 150, // px - distance threshold for "near" latency
-    farLatencyThreshold: 350   // px - distance threshold for "far" latency
+const FLOW_ANIMATION_CONFIG = {
+    shimmerLength: 60,           // Length of the gradient shimmer in pixels
+    shimmerSpeed: 2.0,           // cm/s equivalent speed (scaled to canvas)
+    shimmerOpacity: 0.25,        // Max opacity of shimmer (20-30%)
+    baseTraversalTime: 3.0,      // Reference time for a 300px path
+    referenceDistance: 300       // Reference distance in pixels
 };
 
 let currentView = null;
@@ -65,15 +67,16 @@ function drawMap(svc, upNodes) {
     const gNodes = document.getElementById('layer-nodes');
     const gQuorum = document.getElementById('layer-quorum-links');
     const gClients = document.getElementById('layer-client-links');
+    const gFlows = document.getElementById('layer-flows') || createFlowLayer();
     
-    gNodes.innerHTML = ''; gQuorum.innerHTML = ''; gClients.innerHTML = '';
+    gNodes.innerHTML = ''; gQuorum.innerHTML = ''; gClients.innerHTML = ''; gFlows.innerHTML = '';
 
     // 1. Draw Quorum Triad Connections
     if (upNodes.includes("ewa") && upNodes.includes("phx")) drawLink(SITES.ewa, SITES.phx, gQuorum, 'quorum ' + (upNodes.length<3?'degraded':''));
     if (upNodes.includes("phx") && upNodes.includes("clt")) drawLink(SITES.phx, SITES.clt, gQuorum, 'quorum ' + (upNodes.length<3?'degraded':''));
     if (upNodes.includes("clt") && upNodes.includes("ewa")) drawLink(SITES.clt, SITES.ewa, gQuorum, 'quorum ' + (upNodes.length<3?'degraded':''));
 
-    // 2. Draw Client Routing & Latency Pulses
+    // 2. Draw Client Routing & Flow Shimmer
     Object.keys(SITES).forEach(key => {
         const site = SITES[key];
         if (site.type === 'client') {
@@ -86,27 +89,15 @@ function drawMap(svc, upNodes) {
                     if (d < minVisDist) { minVisDist = d; closest = t; }
                 });
 
-                // All packets take consistent time, latency shown via color
-                const latencyDur = ANIMATION_CONFIG.baseLatencyDur;
                 const pathId = `path-${key}`;
                 
                 // Draw static line
                 drawLink(site, SITES[closest], gClients, 'client', pathId);
                 
-                // Determine packet color based on distance (simulating latency)
-                let packetColor = 'var(--cyan)'; // Default: good latency
-                if (minVisDist > ANIMATION_CONFIG.farLatencyThreshold) {
-                    packetColor = 'var(--amber)'; // High latency (far routes)
-                } else if (minVisDist > ANIMATION_CONFIG.nearLatencyThreshold) {
-                    packetColor = 'var(--cyan)'; // Medium latency (local routes)
-                }
-                
-                if (upNodes.length < 2) {
-                    packetColor = 'var(--red)'; // Service down
-                }
-                
+                // Draw flow shimmer along the line
                 if (upNodes.length >= 2) { // Only animate if quorum is up
-                    drawPulse(pathId, latencyDur, packetColor, gClients, minVisDist);
+                    const shimmerColor = minVisDist > 350 ? 'var(--amber)' : 'var(--cyan)';
+                    drawFlowShimmer(pathId, minVisDist, shimmerColor, gFlows);
                 }
             }
         }
@@ -140,6 +131,17 @@ function drawMap(svc, upNodes) {
 }
 
 // Helpers
+function createFlowLayer() {
+    const svg = document.querySelector('svg');
+    let gFlows = document.getElementById('layer-flows');
+    if (!gFlows) {
+        gFlows = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+        gFlows.setAttribute('id', 'layer-flows');
+        svg.appendChild(gFlows);
+    }
+    return gFlows;
+}
+
 function getHexPoints(x, y, r) {
     let pts = [];
     for (let i = 0; i < 6; i++) {
@@ -159,22 +161,73 @@ function drawLink(n1, n2, group, className, id = null) {
     group.appendChild(path);
 }
 
-function drawPulse(pathId, duration, color, group, distance) {
-    const packet = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-    packet.setAttribute('r', '3'); packet.setAttribute('fill', color);
+function drawFlowShimmer(pathId, distance, color, group) {
+    // Calculate animation duration based on distance
+    // Proportional scaling: maintain crawl-like speed
+    const animDuration = (distance / FLOW_ANIMATION_CONFIG.referenceDistance) * FLOW_ANIMATION_CONFIG.baseTraversalTime;
     
-    // Increase glow intensity for far/high-latency routes
-    const glowIntensity = distance > ANIMATION_CONFIG.farLatencyThreshold ? 8 : 5;
-    packet.style.filter = `drop-shadow(0 0 ${glowIntensity}px ${color})`;
+    // Create SVG filter with a gradient shimmer effect
+    const defs = document.querySelector('svg defs') || (() => {
+        const newDefs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
+        document.querySelector('svg').insertBefore(newDefs, document.querySelector('svg').firstChild);
+        return newDefs;
+    })();
     
-    const animate = document.createElementNS('http://www.w3.org/2000/svg', 'animateMotion');
-    animate.setAttribute('dur', `${duration}s`);
-    animate.setAttribute('repeatCount', 'indefinite');
+    const filterId = `shimmer-filter-${pathId}`;
+    if (!document.getElementById(filterId)) {
+        const filter = document.createElementNS('http://www.w3.org/2000/svg', 'filter');
+        filter.setAttribute('id', filterId);
+        filter.setAttribute('x', '-50%');
+        filter.setAttribute('y', '-50%');
+        filter.setAttribute('width', '200%');
+        filter.setAttribute('height', '200%');
+        
+        // Radial gradient for soft shimmer
+        const radialGrad = document.createElementNS('http://www.w3.org/2000/svg', 'radialGradient');
+        radialGrad.setAttribute('id', `grad-${filterId}`);
+        radialGrad.innerHTML = `
+            <stop offset="0%" style="stop-color:${color};stop-opacity:${FLOW_ANIMATION_CONFIG.shimmerOpacity}" />
+            <stop offset="50%" style="stop-color:${color};stop-opacity:0.1" />
+            <stop offset="100%" style="stop-color:${color};stop-opacity:0" />
+        `;
+        defs.appendChild(radialGrad);
+    }
     
-    const mPath = document.createElementNS('http://www.w3.org/2000/svg', 'mpath');
-    mPath.setAttribute('href', `#${pathId}`);
+    // Create the shimmer line (a stroked path that animates along the target path)
+    const shimmerPath = document.createElementNS('http://www.w3.org/2000/svg', 'use');
+    shimmerPath.setAttribute('href', `#${pathId}`);
+    shimmerPath.setAttribute('class', 'flow-shimmer');
+    shimmerPath.setAttribute('stroke', color);
+    shimmerPath.setAttribute('stroke-width', `${FLOW_ANIMATION_CONFIG.shimmerLength}`);
+    shimmerPath.setAttribute('stroke-opacity', `${FLOW_ANIMATION_CONFIG.shimmerOpacity}`);
+    shimmerPath.setAttribute('fill', 'none');
+    shimmerPath.setAttribute('stroke-linecap', 'round');
     
-    animate.appendChild(mPath); packet.appendChild(animate); group.appendChild(packet);
+    // Animate the stroke-dasharray to create a traveling shimmer
+    const animateStrokeDash = document.createElementNS('http://www.w3.org/2000/svg', 'animate');
+    animateStrokeDash.setAttribute('attributeName', 'stroke-dashoffset');
+    animateStrokeDash.setAttribute('from', `0`);
+    animateStrokeDash.setAttribute('to', `${distance}`);
+    animateStrokeDash.setAttribute('dur', `${animDuration}s`);
+    animateStrokeDash.setAttribute('repeatCount', 'indefinite');
+    animateStrokeDash.setAttribute('keyTimes', '0;1');
+    animateStrokeDash.setAttribute('keySplines', '0.42 0 0.58 1'); // Ease-in-out
+    
+    shimmerPath.appendChild(animateStrokeDash);
+    
+    // Apply subtle opacity variation to avoid static appearance
+    const animateOpacity = document.createElementNS('http://www.w3.org/2000/svg', 'animate');
+    animateOpacity.setAttribute('attributeName', 'stroke-opacity');
+    animateOpacity.setAttribute('from', `${FLOW_ANIMATION_CONFIG.shimmerOpacity * 0.7}`);
+    animateOpacity.setAttribute('to', `${FLOW_ANIMATION_CONFIG.shimmerOpacity}`);
+    animateOpacity.setAttribute('dur', '2s');
+    animateOpacity.setAttribute('repeatCount', 'indefinite');
+    animateOpacity.setAttribute('keyTimes', '0;0.5;1');
+    animateOpacity.setAttribute('values', `${FLOW_ANIMATION_CONFIG.shimmerOpacity * 0.7};${FLOW_ANIMATION_CONFIG.shimmerOpacity};${FLOW_ANIMATION_CONFIG.shimmerOpacity * 0.7}`);
+    
+    shimmerPath.appendChild(animateOpacity);
+    
+    group.appendChild(shimmerPath);
 }
 
 window.onload = init;
